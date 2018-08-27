@@ -56,17 +56,19 @@ var _keywords = map[string]string{
 }
 
 func peekRune(r *bufio.Reader) rune {
-	bs := []byte{}
+	// Incrementally peek 1 more byte ahead until we get a valid rune.
+	nPeek := 0
 	for {
-		peekBs, _ := r.Peek(1)
-		if len(peekBs) == 0 {
+		peekBs, _ := r.Peek(nPeek)
+		if len(peekBs) < nPeek {
 			return 0
 		}
+		bs := []byte{}
 		bs = append(bs, peekBs...)
-
 		if ch, _ := utf8.DecodeRune(bs); ch != utf8.RuneError {
 			return ch
 		}
+		nPeek++
 	}
 	return 0
 }
