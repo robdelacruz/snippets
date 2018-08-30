@@ -72,10 +72,12 @@ func init() {
 	node = Node{
 		"id":     "123",
 		"title":  "Note Title",
+		"date":   "2018-08-30",
+		"cat":    "grocery",
 		"tags":   "tag1,tag2,tag3",
 		"debit":  "2.00",
 		"credit": "3.00",
-		"amt":    "5.00",
+		"amt":    "99.00",
 		"body":   "This is the body content.",
 	}
 
@@ -98,6 +100,13 @@ func toNum(s string) float64 {
 }
 func toStr(n float64) string {
 	return fmt.Sprintf("%f", n)
+}
+
+func toBool(s string) bool {
+	if s == "0" {
+		return false
+	}
+	return true
 }
 
 // D0 <- node[ident]
@@ -190,7 +199,6 @@ func div() {
 	D0.Typ = "NUM"
 	D0.Val = toStr(toNum(leftD0.Val) / toNum(D0.Val))
 }
-
 func add() {
 	leftD0 := D0
 	exprTerm()
@@ -201,7 +209,6 @@ func add() {
 	}
 	D0.Val = toStr(toNum(leftD0.Val) + toNum(D0.Val))
 }
-
 func minus() {
 	leftD0 := D0
 	exprTerm()
@@ -258,7 +265,7 @@ func expr() {
 // amt >= 100.0
 // debit >= credit - amt + 100.0
 // amt / 5 <= credit * 2
-func condition() {
+func comparison() {
 	expr()
 	leftD0 := D0
 
@@ -338,6 +345,94 @@ func doCmp(l Operand, op string, r Operand) bool {
 	return false
 }
 
+// D0 <- comparison [and|or comparison]...
+func condition() {
+	fLParen := false
+	tok := ts.PeekTok()
+	if tok.Typ == "LPAREN" {
+		ts.MatchTok("LPAREN")
+		fLParen = true
+	}
+
+	comparison()
+
+	tok = ts.PeekTok()
+	for tok != nil {
+		if tok.Typ == "AND" {
+			ts.NextTok()
+			conditionAnd()
+		} else if tok.Typ == "OR" {
+			ts.NextTok()
+			conditionOr()
+		} else {
+			break
+		}
+		tok = ts.PeekTok()
+	}
+
+	if fLParen {
+		ts.MatchTok("RPAREN")
+	}
+}
+func conditionAnd() {
+	leftD0 := D0
+	comparison()
+
+	if toBool(leftD0.Val) && toBool(D0.Val) {
+		D0.Val = "1"
+	} else {
+		D0.Val = "0"
+	}
+}
+func conditionOr() {
+	leftD0 := D0
+	comparison()
+
+	if toBool(leftD0.Val) || toBool(D0.Val) {
+		D0.Val = "1"
+	} else {
+		D0.Val = "0"
+	}
+}
+
+func compoundCondition() {
+	condition()
+
+	tok := ts.PeekTok()
+	for tok != nil {
+		if tok.Typ == "AND" {
+			ts.NextTok()
+			compoundConditionAnd()
+		} else if tok.Typ == "OR" {
+			ts.NextTok()
+			compoundConditionOr()
+		} else {
+			break
+		}
+		tok = ts.PeekTok()
+	}
+}
+func compoundConditionAnd() {
+	leftD0 := D0
+	condition()
+
+	if toBool(leftD0.Val) && toBool(D0.Val) {
+		D0.Val = "1"
+	} else {
+		D0.Val = "0"
+	}
+}
+func compoundConditionOr() {
+	leftD0 := D0
+	condition()
+
+	if toBool(leftD0.Val) || toBool(D0.Val) {
+		D0.Val = "1"
+	} else {
+		D0.Val = "0"
+	}
+}
+
 var D0 Operand
 var ts *TokStream
 var gstack *Stack
@@ -345,7 +440,7 @@ var node Node
 var fieldTypes map[string]string
 
 func main() {
-	condition()
+	compoundCondition()
 
 	fmt.Println(D0.Val)
 }

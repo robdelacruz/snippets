@@ -149,9 +149,9 @@ func readTok(r *bufio.Reader) *Token {
 	if ch == '>' || ch == '<' || ch == '=' {
 		peekCh := peekRune(r)
 		if peekCh != 0 {
-			readRune(r) // advance read pos
 			opTest := string([]rune{ch, peekCh})
 			if _ops[opTest] != "" {
+				readRune(r) // advance read pos
 				return &Token{_ops[opTest], opTest}
 			}
 		}
