@@ -1,27 +1,14 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
-	"io"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 )
 
 type Node map[string]string
-
-type Token struct {
-	Typ string
-	Lit string
-}
-
-type Operand struct {
-	Typ string
-	Val string
-}
 
 type Stack struct {
 	items []Operand
@@ -57,27 +44,6 @@ func (st *Stack) Pop() Operand {
 // string literal, num literal
 //
 
-var _ops = map[string]string{
-	">":  "GT",
-	">=": "GTE",
-	"<":  "LT",
-	"<=": "LTE",
-	"=":  "EQ",
-	"=~": "REG_EQ",
-	"<>": "NE",
-	"(":  "LPAREN",
-	")":  "RPAREN",
-	"+":  "PLUS",
-	"-":  "MINUS",
-	"*":  "MULT",
-	"/":  "DIV",
-}
-
-var _keywords = map[string]string{
-	"and": "AND",
-	"or":  "OR",
-}
-
 func inSlc(s string, slc []string) bool {
 	for _, n := range slc {
 		if s == n {
@@ -85,151 +51,6 @@ func inSlc(s string, slc []string) bool {
 		}
 	}
 	return false
-}
-
-func peekRune(r *bufio.Reader) rune {
-	bs := []byte{}
-	for {
-		peekBs, _ := r.Peek(1)
-		if len(peekBs) == 0 {
-			return 0
-		}
-		bs = append(bs, peekBs...)
-
-		if ch, _ := utf8.DecodeRune(bs); ch != utf8.RuneError {
-			return ch
-		}
-	}
-	return 0
-}
-
-func readRune(r *bufio.Reader) rune {
-	ch, _, err := r.ReadRune()
-	if err == io.EOF {
-		return 0
-	}
-	return ch
-}
-
-func skipWhitespace(r *bufio.Reader) {
-	for {
-		peekCh := peekRune(r)
-		// Stop on non whitespace char
-		if peekCh == 0 || !unicode.IsSpace(peekCh) {
-			break
-		}
-		r.ReadRune() // advance read pos
-	}
-}
-
-func NextTokenFunc(f io.Reader) func() *Token {
-	r := bufio.NewReader(f)
-
-	return func() *Token {
-		skipWhitespace(r)
-
-		ch := readRune(r)
-		if ch == 0 {
-			return nil
-		}
-
-		// Test two letter ops such as ">=", "<>", etc.
-		if ch == '>' || ch == '<' || ch == '=' {
-			peekCh := peekRune(r)
-			if peekCh != 0 {
-				readRune(r) // advance read pos
-				opTest := string([]rune{ch, peekCh})
-				if _ops[opTest] != "" {
-					return &Token{_ops[opTest], opTest}
-				}
-			}
-		}
-
-		// Test single letter ops such as ">", "="
-		sch := string(ch)
-		if _ops[sch] != "" {
-			return &Token{_ops[sch], sch}
-		}
-
-		// Test numbers: 123.45, 5 (both floats and ints supported)
-		if unicode.IsDigit(ch) {
-			chs := []rune{ch}
-
-			fDecimalPt := false
-			for {
-				peekCh := peekRune(r)
-				if peekCh == 0 {
-					break
-				}
-				// Stop when non-digit or non-decimal point encountered
-				if !unicode.IsDigit(peekCh) && peekCh != '.' {
-					break
-				}
-				// Stop if second decimal point encountered  Ex. 123.45.67
-				if peekCh == '.' && fDecimalPt {
-					break
-				}
-
-				if peekCh == '.' {
-					fDecimalPt = true
-				}
-
-				ch := readRune(r) // advance read pos
-				chs = append(chs, ch)
-			}
-			return &Token{"NUM", string(chs)}
-		}
-
-		// Test identifiers: var1, foo, Foo, camelCasedVar, Field1
-		// Or keywords: and, or
-		if unicode.IsLetter(ch) {
-			chs := []rune{ch}
-
-			for {
-				peekCh := peekRune(r)
-				if peekCh == 0 {
-					break
-				}
-				// Stop when non-letter, non-digit, '_' encountered.
-				if !unicode.IsLetter(peekCh) && !unicode.IsDigit(peekCh) &&
-					peekCh != '_' {
-					break
-				}
-
-				ch = readRune(r) // advance read pos
-				chs = append(chs, ch)
-			}
-
-			sident := string(chs)
-			if _keywords[sident] != "" {
-				return &Token{_keywords[sident], sident}
-			}
-			return &Token{"IDENT", sident}
-		}
-
-		if ch == '"' || ch == '\'' {
-			quoteChar := ch
-			chs := []rune{}
-
-			for {
-				peekCh := peekRune(r)
-				if peekCh == 0 {
-					break
-				}
-				// Stop when closing quote char encountered.
-				if peekCh == quoteChar {
-					readRune(r)
-					break
-				}
-
-				ch := readRune(r) // advance read pos
-				chs = append(chs, ch)
-			}
-			return &Token{"STR", string(chs)}
-		}
-
-		return &Token{"UNDEF", string(ch)}
-	}
 }
 
 func error(s string) {
@@ -245,29 +66,8 @@ func expected(s string) {
 	abort(fmt.Sprintf("%s expected", s))
 }
 
-func tokenize(f io.Reader, nextTok func() *Token) []*Token {
-	toks := []*Token{}
-	for {
-		tok := nextTok()
-		if tok == nil {
-			break
-		}
-		toks = append(toks, tok)
-	}
-	return toks
-}
-
-var toks []*Token
-var iCurTok int
-var iPeekTok int
-
 func init() {
-	nextTok := NextTokenFunc(os.Stdin)
-	toks = tokenize(os.Stdin, nextTok)
-	iCurTok = -1
-	iPeekTok = 0
-
-	gstack = NewStack()
+	ts = Tokenize(os.Stdin)
 
 	node = Node{
 		"id":     "123",
@@ -289,83 +89,6 @@ func init() {
 	}
 }
 
-func isNumField(fieldName string) bool {
-	fieldType := fieldTypes[fieldName]
-	if fieldType == "f" || fieldType == "d" {
-		return true
-	}
-	return false
-}
-
-// Get num from either literal token num or node field
-func tokenNum(tok Token) float64 {
-	if tok.Typ != "IDENT" && tok.Typ != "NUM" {
-		expected("number literal or number field")
-	}
-
-	if tok.Typ == "IDENT" {
-		fieldName := tok.Lit
-		if !isNumField(fieldName) {
-			abort(fmt.Sprintf("Field '%s' is not numeric type", fieldName))
-		}
-		return toNum(node[fieldName])
-	}
-	return toNum(tok.Lit)
-}
-
-// Get string from either literal token str or node field
-func tokenStr(tok Token) string {
-	if tok.Typ != "IDENT" && tok.Typ != "STR" {
-		expected("string literal or field string")
-	}
-
-	if tok.Typ == "IDENT" {
-		fieldName := tok.Lit
-		return node[fieldName]
-	}
-	return tok.Lit
-}
-
-func tok(i int) *Token {
-	if i < 0 || i >= len(toks) {
-		return nil
-	}
-	return toks[i]
-}
-
-func peekTok() *Token {
-	return tok(iPeekTok)
-}
-
-func nextTok() *Token {
-	tok := peekTok()
-
-	iCurTok++
-	iPeekTok++
-	if iCurTok > len(toks) {
-		iCurTok = len(toks)
-	}
-	if iPeekTok > len(toks)+1 {
-		iPeekTok = len(toks) + 1
-	}
-
-	return tok
-}
-
-func matchTok(tokName string) Operand {
-	tok := peekTok()
-	if tok == nil || tok.Typ != tokName {
-		expected(tokName)
-	}
-	nextTok() // advance read pos
-
-	typ := "STR"
-	if tok.Typ == "NUM" {
-		typ = "NUM"
-	}
-	return Operand{typ, tok.Lit}
-}
-
 func toNum(s string) float64 {
 	n, err := strconv.ParseFloat(s, 64)
 	if err != nil {
@@ -379,7 +102,7 @@ func toStr(n float64) string {
 
 // D0 <- node[ident]
 func field() {
-	opr := matchTok("IDENT")
+	opr := ts.MatchTok("IDENT")
 	fieldName := opr.Val
 	fieldType := fieldTypes[fieldName]
 
@@ -391,17 +114,22 @@ func field() {
 }
 
 // D0 <- num | str | field
+// D0 <- (expr1)
 func atom() {
-	tok := peekTok()
+	tok := ts.PeekTok()
 	if tok == nil {
 		expected("field, number or string")
 	}
 	if tok.Typ == "IDENT" {
 		field()
 	} else if tok.Typ == "NUM" {
-		D0 = matchTok("NUM")
+		D0 = ts.MatchTok("NUM")
 	} else if tok.Typ == "STR" {
-		D0 = matchTok("STR")
+		D0 = ts.MatchTok("STR")
+	} else if tok.Typ == "LPAREN" {
+		ts.MatchTok("LPAREN")
+		expr()
+		ts.MatchTok("RPAREN")
 	} else {
 		expected("field, number or string")
 	}
@@ -410,86 +138,62 @@ func atom() {
 // D0 <- atom
 // D0 <- atom * atom ...
 // D0 <- atom / atom ...
-func expr0() {
+func exprTerm() {
 	atom()
 
-	tok := peekTok()
+	tok := ts.PeekTok()
 	for tok != nil {
 		if tok.Typ == "MULT" {
-			nextTok()
+			ts.NextTok()
 			mult()
 		} else if tok.Typ == "DIV" {
-			nextTok()
+			ts.NextTok()
 			div()
 		} else {
 			break
 		}
-		tok = peekTok()
+		tok = ts.PeekTok()
 	}
 }
 
-// D0 <- expr0
-// D0 <- expr0 + expr0 ...
-// D0 <- expr0 - expr0 ...
-func expr1() {
-	expr0()
-
-	tok := peekTok()
-	for tok != nil {
-		if tok.Typ == "PLUS" {
-			nextTok()
-			add()
-		} else if tok.Typ == "MINUS" {
-			nextTok()
-			minus()
-		} else {
-			break
-		}
-		tok = peekTok()
-	}
-}
-
-// D0 <- D0 * field{n}
-// D0 <- D0 * num
+// D0 <- D0 * atom
 func mult() {
-	tok := peekTok()
-	if tok == nil {
-		return
-	}
-	factor := tokenNum(*tok)
-	nextTok()
+	leftD0 := D0
+	atom()
 
-	if D0.Typ == "STR" {
-		D0.Val = strings.Repeat(D0.Val, int(factor))
+	if D0.Typ != "NUM" {
+		abort("can't multiply by non-number")
+	}
+
+	if leftD0.Typ == "STR" {
+		D0.Val = strings.Repeat(leftD0.Val, int(toNum(D0.Val)))
 		return
 	}
 	D0.Typ = "NUM"
-	D0.Val = toStr(toNum(D0.Val) * factor)
+	D0.Val = toStr(toNum(leftD0.Val) * toNum(D0.Val))
 }
 
-// D0 <- D0 / field{n}
-// D0 <- D0 / num
+// D0 <- D0 / atom
 func div() {
-	tok := peekTok()
-	if tok == nil {
-		return
-	}
-	divisor := tokenNum(*tok)
-	nextTok()
+	leftD0 := D0
+	atom()
 
-	if divisor == 0.0 {
+	if D0.Typ != "NUM" {
+		abort("can't divide by non-number")
+	}
+	if leftD0.Typ == "STR" {
+		abort("can't divide string")
+	}
+	if toNum(D0.Val) == 0.0 {
 		abort("can't divide by zero")
 	}
-	if D0.Typ == "STR" {
-		abort("can't do division on string")
-	}
 	D0.Typ = "NUM"
-	D0.Val = toStr(toNum(D0.Val) / divisor)
+	D0.Val = toStr(toNum(leftD0.Val) / toNum(D0.Val))
 }
 
 func add() {
 	leftD0 := D0
-	expr0()
+	exprTerm()
 
 	if leftD0.Typ == "STR" || D0.Typ == "STR" {
 		D0.Val = leftD0.Val + D0.Val
@@ -500,7 +204,7 @@ func add() {
 
 func minus() {
 	leftD0 := D0
-	expr0()
+	exprTerm()
 
 	if leftD0.Typ == "STR" || D0.Typ == "STR" {
 		expected("number")
@@ -509,13 +213,139 @@ func minus() {
 	D0.Val = toStr(toNum(leftD0.Val) - toNum(D0.Val))
 }
 
+// D0 <- exprTerm
+// D0 <- exprTerm + exprTerm ...
+// D0 <- exprTerm - exprTerm ...
+func expr() {
+	// Check if unary + or -
+	unaryMinus := false
+	tok := ts.PeekTok()
+	if tok.Typ == "PLUS" {
+		ts.NextTok()
+	} else if tok.Typ == "MINUS" {
+		ts.NextTok()
+		unaryMinus = true
+	}
+
+	exprTerm()
+
+	// If unary minus, negate the D0 value
+	if unaryMinus {
+		if D0.Typ != "NUM" {
+			expected("number after unary minus (-)")
+		}
+		D0.Val = toStr(0.0 - toNum(D0.Val))
+	}
+
+	tok = ts.PeekTok()
+	for tok != nil {
+		if tok.Typ == "PLUS" {
+			ts.NextTok()
+			add()
+		} else if tok.Typ == "MINUS" {
+			ts.NextTok()
+			minus()
+		} else {
+			break
+		}
+		tok = ts.PeekTok()
+	}
+}
+
+// D0 <- expr <cmpOp> expr
+// Ex.
+// title =~ "text within title"
+// amt >= 100.0
+// debit >= credit - amt + 100.0
+// amt / 5 <= credit * 2
+func condition() {
+	expr()
+	leftD0 := D0
+
+	tok := ts.PeekTok()
+	if tok == nil {
+		abort("expression needs a condition")
+	}
+	if !inSlc(tok.Typ, []string{"GT", "GTE", "LT", "LTE", "EQ", "REG_EQ", "NE"}) {
+		abort("expression needs a condition")
+	}
+	cmpOp := tok.Typ
+	ts.NextTok()
+
+	expr()
+	rightD0 := D0
+
+	D0.Typ = "NUM"
+	D0.Val = "0"
+	if doCmp(leftD0, cmpOp, rightD0) {
+		D0.Val = "1"
+	}
+}
+
+func doCmp(l Operand, op string, r Operand) bool {
+	if l.Typ != r.Typ {
+		abort("operand mismatch")
+	}
+
+	if l.Typ == "STR" {
+		// string comparison
+		switch op {
+		case "GT":
+			return l.Val > r.Val
+		case "GTE":
+			return l.Val >= r.Val
+		case "LT":
+			return l.Val < r.Val
+		case "LTE":
+			return l.Val <= r.Val
+		case "EQ":
+			return l.Val == r.Val
+		case "NE":
+			return l.Val != r.Val
+		case "REG_EQ":
+			matched, _ := regexp.MatchString("(?i)"+r.Val, l.Val)
+			return matched
+		default:
+			abort("unknown comparison operator")
+		}
+	} else {
+		// num comparison
+		lNum := toNum(l.Val)
+		rNum := toNum(r.Val)
+
+		switch op {
+		case "GT":
+			return lNum > rNum
+		case "GTE":
+			return lNum >= rNum
+		case "LT":
+			return lNum < rNum
+		case "LTE":
+			return lNum <= rNum
+		case "EQ":
+			return lNum == rNum
+		case "NE":
+			return lNum != rNum
+		case "REG_EQ":
+			matched, _ := regexp.MatchString("(?i)"+r.Val, l.Val)
+			return matched
+		default:
+			abort("unknown comparison operator")
+		}
+	}
+
+	abort("unknown error")
+	return false
+}
+
 var D0 Operand
+var ts *TokStream
 var gstack *Stack
 var node Node
 var fieldTypes map[string]string
 
 func main() {
-	expr1()
+	condition()
 
 	fmt.Println(D0.Val)
 }

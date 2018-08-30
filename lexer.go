@@ -2,41 +2,16 @@ package main
 
 import (
 	"bufio"
-	"fmt"
 	"io"
-	"os"
 	"unicode"
 	"unicode/utf8"
 )
 
-func main() {
-	nextTok := NextTokenFunc(os.Stdin)
-
-	for {
-		tok := nextTok()
-		if tok.name == "EOF" {
-			break
-		}
-		fmt.Println(tok)
-	}
-}
-
-type Token struct {
-	name string
-	lit  string
-}
-
-// Sample:
-// (date >= "2018-08-01" and date < "2018-09-01") or (cat = 'grocery' or
-// cat = 'household') and (amt >= 100.0 or (cat = "dineout" and amt > 75.0))
-//
-// body =~ "todo"
-// cat <> ""
-
-// Token list:
-// >, >=, <, <=, =, =~, <>
-// string literal, num literal
-//
+// Usage:
+// ts := Tokenize(os.Stdin)
+// tok := ts.peekTok()
+// ts.NextTok()
+// tok = ts.tok()
 
 var _ops = map[string]string{
 	">":  "GT",
@@ -48,6 +23,10 @@ var _ops = map[string]string{
 	"<>": "NE",
 	"(":  "LPAREN",
 	")":  "RPAREN",
+	"+":  "PLUS",
+	"-":  "MINUS",
+	"*":  "MULT",
+	"/":  "DIV",
 }
 
 var _keywords = map[string]string{
@@ -55,22 +34,96 @@ var _keywords = map[string]string{
 	"or":  "OR",
 }
 
-func peekRune(r *bufio.Reader) rune {
-	// Incrementally peek 1 more byte ahead until we get a valid rune.
-	nPeek := 0
+type Token struct {
+	Typ string
+	Lit string
+}
+
+type Operand struct {
+	Typ string
+	Val string
+}
+
+type TokStream struct {
+	toks     []*Token
+	iPeekTok int
+}
+
+func Tokenize(f io.Reader) *TokStream {
+	r := bufio.NewReader(f)
+	toks := []*Token{}
 	for {
-		peekBs, _ := r.Peek(nPeek)
-		if len(peekBs) < nPeek {
+		tok := readTok(r)
+		if tok == nil {
+			break
+		}
+		toks = append(toks, tok)
+	}
+
+	return &TokStream{
+		toks:     toks,
+		iPeekTok: 0,
+	}
+}
+
+func (ts *TokStream) tok(i int) *Token {
+	if i < 0 || i >= len(ts.toks) {
+		return nil
+	}
+	return ts.toks[i]
+}
+
+func (ts *TokStream) PeekTok() *Token {
+	return ts.tok(ts.iPeekTok)
+}
+
+func (ts *TokStream) NextTok() *Token {
+	tok := ts.PeekTok()
+
+	ts.iPeekTok++
+	if ts.iPeekTok > len(ts.toks)+1 {
+		ts.iPeekTok = len(ts.toks) + 1
+	}
+
+	return tok
+}
+
+func (ts *TokStream) MatchTok(tokName string) Operand {
+	tok := ts.PeekTok()
+	if tok == nil || tok.Typ != tokName {
+		expected(tokName)
+	}
+	ts.NextTok() // advance read pos
+
+	typ := "STR"
+	if tok.Typ == "NUM" {
+		typ = "NUM"
+	}
+	return Operand{typ, tok.Lit}
+}
+
+func peekRune(r *bufio.Reader) rune {
+	bs := []byte{}
+	for {
+		peekBs, _ := r.Peek(1)
+		if len(peekBs) == 0 {
 			return 0
 		}
-		bs := []byte{}
 		bs = append(bs, peekBs...)
+
 		if ch, _ := utf8.DecodeRune(bs); ch != utf8.RuneError {
 			return ch
 		}
-		nPeek++
 	}
 	return 0
+}
+
+func readRune(r *bufio.Reader) rune {
+	ch, _, err := r.ReadRune()
+	if err == io.EOF {
+		return 0
+	}
+	return ch
 }
 
 func skipWhitespace(r *bufio.Reader) {
@@ -84,121 +137,108 @@ func skipWhitespace(r *bufio.Reader) {
 	}
 }
 
-func NextTokenFunc(f io.Reader) func() Token {
-	r := bufio.NewReader(f)
+func readTok(r *bufio.Reader) *Token {
+	skipWhitespace(r)
 
-	return func() Token {
-		skipWhitespace(r)
-
-		ch, _, err := r.ReadRune()
-		if err == io.EOF {
-			return Token{"EOF", ""}
-		}
-
-		// Test two letter ops such as ">=", "<>", etc.
-		if ch == '>' || ch == '<' || ch == '=' {
-			peekCh := peekRune(r)
-			if peekCh != 0 {
-				r.ReadRune() // advance read pos
-				opTest := string([]rune{ch, peekCh})
-				if _ops[opTest] != "" {
-					return Token{_ops[opTest], opTest}
-				}
-			}
-		}
-
-		// Test single letter ops such as ">", "="
-		sch := string(ch)
-		if _ops[sch] != "" {
-			return Token{_ops[sch], sch}
-		}
-
-		// Test numbers: 123.45, 5 (both floats and ints supported)
-		if unicode.IsDigit(ch) {
-			chs := []rune{ch}
-
-			fDecimalPt := false
-			for {
-				peekCh := peekRune(r)
-				if peekCh == 0 {
-					break
-				}
-				// Stop when non-digit or non-decimal point encountered
-				if !unicode.IsDigit(peekCh) && peekCh != '.' {
-					break
-				}
-				// Stop if second decimal point encountered  Ex. 123.45.67
-				if peekCh == '.' && fDecimalPt {
-					break
-				}
-
-				if peekCh == '.' {
-					fDecimalPt = true
-				}
-
-				ch, _, err := r.ReadRune() // advance read pos
-				if err == io.EOF {
-					break
-				}
-				chs = append(chs, ch)
-			}
-			return Token{"NUM", string(chs)}
-		}
-
-		// Test identifiers: var1, foo, Foo, camelCasedVar, Field1
-		// Or keywords: and, or
-		if unicode.IsLetter(ch) {
-			chs := []rune{ch}
-
-			for {
-				peekCh := peekRune(r)
-				if peekCh == 0 {
-					break
-				}
-				// Stop when non-letter, non-digit, '_' encountered.
-				if !unicode.IsLetter(peekCh) && !unicode.IsDigit(peekCh) &&
-					peekCh != '_' {
-					break
-				}
-
-				ch, _, err := r.ReadRune() // advance read pos
-				if err == io.EOF {
-					break
-				}
-				chs = append(chs, ch)
-			}
-
-			sident := string(chs)
-			if _keywords[sident] != "" {
-				return Token{_keywords[sident], sident}
-			}
-			return Token{"IDENT", sident}
-		}
-
-		if ch == '"' || ch == '\'' {
-			quoteChar := ch
-			chs := []rune{}
-
-			for {
-				peekCh := peekRune(r)
-				if peekCh == 0 {
-					break
-				}
-				// Stop when closing quote char encountered.
-				if peekCh == quoteChar {
-					r.ReadRune()
-					break
-				}
-
-				ch, _, err := r.ReadRune() // advance read pos
-				if err == io.EOF {
-					break
-				}
-				chs = append(chs, ch)
-			}
-			return Token{"STR_LIT", string(chs)}
-		}
-
-		return Token{"UNDEF", string(ch)}
+	ch := readRune(r)
+	if ch == 0 {
+		return nil
 	}
+
+	// Test two letter ops such as ">=", "<>", etc.
+	if ch == '>' || ch == '<' || ch == '=' {
+		peekCh := peekRune(r)
+		if peekCh != 0 {
+			readRune(r) // advance read pos
+			opTest := string([]rune{ch, peekCh})
+			if _ops[opTest] != "" {
+				return &Token{_ops[opTest], opTest}
+			}
+		}
+	}
+
+	// Test single letter ops such as ">", "="
+	sch := string(ch)
+	if _ops[sch] != "" {
+		return &Token{_ops[sch], sch}
+	}
+
+	// Test numbers: 123.45, 5 (both floats and ints supported)
+	if unicode.IsDigit(ch) {
+		chs := []rune{ch}
+
+		fDecimalPt := false
+		for {
+			peekCh := peekRune(r)
+			if peekCh == 0 {
+				break
+			}
+			// Stop when non-digit or non-decimal point encountered
+			if !unicode.IsDigit(peekCh) && peekCh != '.' {
+				break
+			}
+			// Stop if second decimal point encountered  Ex. 123.45.67
+			if peekCh == '.' && fDecimalPt {
+				break
+			}
+
+			if peekCh == '.' {
+				fDecimalPt = true
+			}
+
+			ch := readRune(r) // advance read pos
+			chs = append(chs, ch)
+		}
+		return &Token{"NUM", string(chs)}
+	}
+
+	// Test identifiers: var1, foo, Foo, camelCasedVar, Field1
+	// Or keywords: and, or
+	if unicode.IsLetter(ch) {
+		chs := []rune{ch}
+
+		for {
+			peekCh := peekRune(r)
+			if peekCh == 0 {
+				break
+			}
+			// Stop when non-letter, non-digit, '_' encountered.
+			if !unicode.IsLetter(peekCh) && !unicode.IsDigit(peekCh) &&
+				peekCh != '_' {
+				break
+			}
+
+			ch = readRune(r) // advance read pos
+			chs = append(chs, ch)
+		}
+
+		sident := string(chs)
+		if _keywords[sident] != "" {
+			return &Token{_keywords[sident], sident}
+		}
+		return &Token{"IDENT", sident}
+	}
+
+	if ch == '"' || ch == '\'' {
+		quoteChar := ch
+		chs := []rune{}
+
+		for {
+			peekCh := peekRune(r)
+			if peekCh == 0 {
+				break
+			}
+			// Stop when closing quote char encountered.
+			if peekCh == quoteChar {
+				readRune(r)
+				break
+			}
+
+			ch := readRune(r) // advance read pos
+			chs = append(chs, ch)
+		}
+		return &Token{"STR", string(chs)}
+	}
+
+	return &Token{"UNDEF", string(ch)}
 }
