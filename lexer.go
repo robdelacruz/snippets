@@ -8,7 +8,7 @@ import (
 )
 
 // Usage:
-// ts := Tokenize(os.Stdin)
+// ts := tokenize(os.Stdin)
 // tok := ts.peekTok()
 // ts.NextTok()
 // tok = ts.tok()
@@ -49,7 +49,7 @@ type TokStream struct {
 	iPeekTok int
 }
 
-func Tokenize(f io.Reader) *TokStream {
+func tokenize(f io.Reader) *TokStream {
 	r := bufio.NewReader(f)
 	toks := []*Token{}
 	for {

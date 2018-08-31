@@ -2,34 +2,36 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
 )
 
-type Node map[string]string
-
-type Stack struct {
-	items []Operand
+type Env struct {
+	Vars     map[string]string
+	VarTypes map[string]string
+	D0       Operand
 }
 
-func NewStack() *Stack {
-	return &Stack{
-		items: []Operand{},
-	}
+type ExprParser struct {
+	ts  *TokStream
+	D0  Operand
+	Env *Env
 }
-func (st *Stack) Push(v Operand) {
-	st.items = append(st.items, v)
-}
-func (st *Stack) Pop() Operand {
-	if len(st.items) == 0 {
-		panic("Pop() on empty stack")
+
+func NewExprParser(f io.Reader) *ExprParser {
+	ep := &ExprParser{
+		ts: tokenize(f),
 	}
-	nlen := len(st.items)
-	v := st.items[nlen-1]
-	st.items = st.items[0 : nlen-1]
-	return v
+	return ep
+}
+
+func (ep *ExprParser) Run(env *Env) Operand {
+	ep.Env = env
+	ep.compoundCondition()
+	return ep.Env.D0
 }
 
 // Sample:
@@ -66,31 +68,6 @@ func expected(s string) {
 	abort(fmt.Sprintf("%s expected", s))
 }
 
-func init() {
-	ts = Tokenize(os.Stdin)
-
-	node = Node{
-		"id":     "123",
-		"title":  "Note Title",
-		"date":   "2018-08-30",
-		"cat":    "grocery",
-		"tags":   "tag1,tag2,tag3",
-		"debit":  "2.00",
-		"credit": "3.00",
-		"amt":    "99.00",
-		"body":   "This is the body content.",
-	}
-
-	fieldTypes = map[string]string{
-		"debit":  "f",
-		"credit": "f",
-		"amt":    "f",
-		"price":  "f",
-		"weight": "f",
-		"age":    "d",
-	}
-}
-
 func toNum(s string) float64 {
 	n, err := strconv.ParseFloat(s, 64)
 	if err != nil {
@@ -109,36 +86,36 @@ func toBool(s string) bool {
 	return true
 }
 
-// D0 <- node[ident]
-func field() {
-	opr := ts.MatchTok("IDENT")
-	fieldName := opr.Val
-	fieldType := fieldTypes[fieldName]
+// D0 <- Vars[ident]
+func (ep *ExprParser) field() {
+	opr := ep.ts.MatchTok("IDENT")
+	varName := opr.Val
+	varType := ep.Env.VarTypes[varName]
 
 	typ := "STR"
-	if fieldType == "f" || fieldType == "d" {
+	if varType == "f" || varType == "d" {
 		typ = "NUM"
 	}
-	D0 = Operand{typ, node[fieldName]}
+	ep.Env.D0 = Operand{typ, ep.Env.Vars[varName]}
 }
 
 // D0 <- num | str | field
 // D0 <- (expr1)
-func atom() {
-	tok := ts.PeekTok()
+func (ep *ExprParser) atom() {
+	tok := ep.ts.PeekTok()
 	if tok == nil {
 		expected("field, number or string")
 	}
 	if tok.Typ == "IDENT" {
-		field()
+		ep.field()
 	} else if tok.Typ == "NUM" {
-		D0 = ts.MatchTok("NUM")
+		ep.Env.D0 = ep.ts.MatchTok("NUM")
 	} else if tok.Typ == "STR" {
-		D0 = ts.MatchTok("STR")
+		ep.Env.D0 = ep.ts.MatchTok("STR")
 	} else if tok.Typ == "LPAREN" {
-		ts.MatchTok("LPAREN")
-		expr()
-		ts.MatchTok("RPAREN")
+		ep.ts.MatchTok("LPAREN")
+		ep.expr()
+		ep.ts.MatchTok("RPAREN")
 	} else {
 		expected("field, number or string")
 	}
@@ -147,115 +124,115 @@ func atom() {
 // D0 <- atom
 // D0 <- atom * atom ...
 // D0 <- atom / atom ...
-func exprTerm() {
-	atom()
+func (ep *ExprParser) exprTerm() {
+	ep.atom()
 
-	tok := ts.PeekTok()
+	tok := ep.ts.PeekTok()
 	for tok != nil {
 		if tok.Typ == "MULT" {
-			ts.NextTok()
-			mult()
+			ep.ts.NextTok()
+			ep.mult()
 		} else if tok.Typ == "DIV" {
-			ts.NextTok()
-			div()
+			ep.ts.NextTok()
+			ep.div()
 		} else {
 			break
 		}
-		tok = ts.PeekTok()
+		tok = ep.ts.PeekTok()
 	}
 }
 
 // D0 <- D0 * atom
-func mult() {
-	leftD0 := D0
-	atom()
+func (ep *ExprParser) mult() {
+	leftD0 := ep.Env.D0
+	ep.atom()
 
-	if D0.Typ != "NUM" {
+	if ep.Env.D0.Typ != "NUM" {
 		abort("can't multiply by non-number")
 	}
 
 	if leftD0.Typ == "STR" {
-		D0.Val = strings.Repeat(leftD0.Val, int(toNum(D0.Val)))
+		ep.Env.D0.Val = strings.Repeat(leftD0.Val, int(toNum(ep.Env.D0.Val)))
 		return
 	}
-	D0.Typ = "NUM"
-	D0.Val = toStr(toNum(leftD0.Val) * toNum(D0.Val))
+	ep.Env.D0.Typ = "NUM"
+	ep.Env.D0.Val = toStr(toNum(leftD0.Val) * toNum(ep.Env.D0.Val))
 }
 
 // D0 <- D0 / atom
-func div() {
-	leftD0 := D0
-	atom()
+func (ep *ExprParser) div() {
+	leftD0 := ep.Env.D0
+	ep.atom()
 
-	if D0.Typ != "NUM" {
+	if ep.Env.D0.Typ != "NUM" {
 		abort("can't divide by non-number")
 	}
 	if leftD0.Typ == "STR" {
 		abort("can't divide string")
 	}
-	if toNum(D0.Val) == 0.0 {
+	if toNum(ep.Env.D0.Val) == 0.0 {
 		abort("can't divide by zero")
 	}
-	D0.Typ = "NUM"
-	D0.Val = toStr(toNum(leftD0.Val) / toNum(D0.Val))
+	ep.Env.D0.Typ = "NUM"
+	ep.Env.D0.Val = toStr(toNum(leftD0.Val) / toNum(ep.Env.D0.Val))
 }
-func add() {
-	leftD0 := D0
-	exprTerm()
+func (ep *ExprParser) add() {
+	leftD0 := ep.Env.D0
+	ep.exprTerm()
 
-	if leftD0.Typ == "STR" || D0.Typ == "STR" {
-		D0.Val = leftD0.Val + D0.Val
+	if leftD0.Typ == "STR" || ep.Env.D0.Typ == "STR" {
+		ep.Env.D0.Val = leftD0.Val + ep.Env.D0.Val
 		return
 	}
-	D0.Val = toStr(toNum(leftD0.Val) + toNum(D0.Val))
+	ep.Env.D0.Val = toStr(toNum(leftD0.Val) + toNum(ep.Env.D0.Val))
 }
-func minus() {
-	leftD0 := D0
-	exprTerm()
+func (ep *ExprParser) minus() {
+	leftD0 := ep.Env.D0
+	ep.exprTerm()
 
-	if leftD0.Typ == "STR" || D0.Typ == "STR" {
+	if leftD0.Typ == "STR" || ep.Env.D0.Typ == "STR" {
 		expected("number")
 		return
 	}
-	D0.Val = toStr(toNum(leftD0.Val) - toNum(D0.Val))
+	ep.Env.D0.Val = toStr(toNum(leftD0.Val) - toNum(ep.Env.D0.Val))
 }
 
 // D0 <- exprTerm
 // D0 <- exprTerm + exprTerm ...
 // D0 <- exprTerm - exprTerm ...
-func expr() {
+func (ep *ExprParser) expr() {
 	// Check if unary + or -
 	unaryMinus := false
-	tok := ts.PeekTok()
+	tok := ep.ts.PeekTok()
 	if tok.Typ == "PLUS" {
-		ts.NextTok()
+		ep.ts.NextTok()
 	} else if tok.Typ == "MINUS" {
-		ts.NextTok()
+		ep.ts.NextTok()
 		unaryMinus = true
 	}
 
-	exprTerm()
+	ep.exprTerm()
 
 	// If unary minus, negate the D0 value
 	if unaryMinus {
-		if D0.Typ != "NUM" {
+		if ep.Env.D0.Typ != "NUM" {
 			expected("number after unary minus (-)")
 		}
-		D0.Val = toStr(0.0 - toNum(D0.Val))
+		ep.Env.D0.Val = toStr(0.0 - toNum(ep.Env.D0.Val))
 	}
 
-	tok = ts.PeekTok()
+	tok = ep.ts.PeekTok()
 	for tok != nil {
 		if tok.Typ == "PLUS" {
-			ts.NextTok()
-			add()
+			ep.ts.NextTok()
+			ep.add()
 		} else if tok.Typ == "MINUS" {
-			ts.NextTok()
-			minus()
+			ep.ts.NextTok()
+			ep.minus()
 		} else {
 			break
 		}
-		tok = ts.PeekTok()
+		tok = ep.ts.PeekTok()
 	}
 }
 
@@ -265,11 +242,11 @@ func expr() {
 // amt >= 100.0
 // debit >= credit - amt + 100.0
 // amt / 5 <= credit * 2
-func comparison() {
-	expr()
-	leftD0 := D0
+func (ep *ExprParser) comparison() {
+	ep.expr()
+	leftD0 := ep.Env.D0
 
-	tok := ts.PeekTok()
+	tok := ep.ts.PeekTok()
 	if tok == nil {
 		abort("expression needs a condition")
 	}
@@ -277,18 +254,17 @@ func comparison() {
 		abort("expression needs a condition")
 	}
 	cmpOp := tok.Typ
-	ts.NextTok()
+	ep.ts.NextTok()
 
-	expr()
-	rightD0 := D0
+	ep.expr()
+	rightD0 := ep.Env.D0
 
-	D0.Typ = "NUM"
-	D0.Val = "0"
+	ep.Env.D0.Typ = "NUM"
+	ep.Env.D0.Val = "0"
 	if doCmp(leftD0, cmpOp, rightD0) {
-		D0.Val = "1"
+		ep.Env.D0.Val = "1"
 	}
 }
-
 func doCmp(l Operand, op string, r Operand) bool {
 	if l.Typ != r.Typ {
 		abort("operand mismatch")
@@ -346,101 +322,121 @@ func doCmp(l Operand, op string, r Operand) bool {
 }
 
 // D0 <- comparison [and|or comparison]...
-func condition() {
+func (ep *ExprParser) condition() {
 	fLParen := false
-	tok := ts.PeekTok()
+	tok := ep.ts.PeekTok()
 	if tok.Typ == "LPAREN" {
-		ts.MatchTok("LPAREN")
+		ep.ts.MatchTok("LPAREN")
 		fLParen = true
+
+		ep.compoundCondition()
+
+		if fLParen {
+			ep.ts.MatchTok("RPAREN")
+		}
+		return
 	}
 
-	comparison()
+	ep.comparison()
 
-	tok = ts.PeekTok()
+	tok = ep.ts.PeekTok()
 	for tok != nil {
 		if tok.Typ == "AND" {
-			ts.NextTok()
-			conditionAnd()
+			ep.ts.NextTok()
+			ep.conditionAnd()
 		} else if tok.Typ == "OR" {
-			ts.NextTok()
-			conditionOr()
+			ep.ts.NextTok()
+			ep.conditionOr()
 		} else {
 			break
 		}
-		tok = ts.PeekTok()
-	}
-
-	if fLParen {
-		ts.MatchTok("RPAREN")
+		tok = ep.ts.PeekTok()
 	}
 }
-func conditionAnd() {
-	leftD0 := D0
-	comparison()
+func (ep *ExprParser) conditionAnd() {
+	leftD0 := ep.Env.D0
+	ep.comparison()
 
-	if toBool(leftD0.Val) && toBool(D0.Val) {
-		D0.Val = "1"
+	if toBool(leftD0.Val) && toBool(ep.Env.D0.Val) {
+		ep.Env.D0.Val = "1"
 	} else {
-		D0.Val = "0"
+		ep.Env.D0.Val = "0"
 	}
 }
-func conditionOr() {
-	leftD0 := D0
-	comparison()
+func (ep *ExprParser) conditionOr() {
+	leftD0 := ep.Env.D0
+	ep.comparison()
 
-	if toBool(leftD0.Val) || toBool(D0.Val) {
-		D0.Val = "1"
+	if toBool(leftD0.Val) || toBool(ep.Env.D0.Val) {
+		ep.Env.D0.Val = "1"
 	} else {
-		D0.Val = "0"
+		ep.Env.D0.Val = "0"
 	}
 }
 
-func compoundCondition() {
-	condition()
+func (ep *ExprParser) compoundCondition() {
+	ep.condition()
 
-	tok := ts.PeekTok()
+	tok := ep.ts.PeekTok()
 	for tok != nil {
 		if tok.Typ == "AND" {
-			ts.NextTok()
-			compoundConditionAnd()
+			ep.ts.NextTok()
+			ep.compoundConditionAnd()
 		} else if tok.Typ == "OR" {
-			ts.NextTok()
-			compoundConditionOr()
+			ep.ts.NextTok()
+			ep.compoundConditionOr()
 		} else {
 			break
 		}
-		tok = ts.PeekTok()
+		tok = ep.ts.PeekTok()
 	}
 }
-func compoundConditionAnd() {
-	leftD0 := D0
-	condition()
+func (ep *ExprParser) compoundConditionAnd() {
+	leftD0 := ep.Env.D0
+	ep.condition()
 
-	if toBool(leftD0.Val) && toBool(D0.Val) {
-		D0.Val = "1"
+	if toBool(leftD0.Val) && toBool(ep.Env.D0.Val) {
+		ep.Env.D0.Val = "1"
 	} else {
-		D0.Val = "0"
+		ep.Env.D0.Val = "0"
 	}
 }
-func compoundConditionOr() {
-	leftD0 := D0
-	condition()
+func (ep *ExprParser) compoundConditionOr() {
+	leftD0 := ep.Env.D0
+	ep.condition()
 
-	if toBool(leftD0.Val) || toBool(D0.Val) {
-		D0.Val = "1"
+	if toBool(leftD0.Val) || toBool(ep.Env.D0.Val) {
+		ep.Env.D0.Val = "1"
 	} else {
-		D0.Val = "0"
+		ep.Env.D0.Val = "0"
 	}
 }
-
-var D0 Operand
-var ts *TokStream
-var gstack *Stack
-var node Node
-var fieldTypes map[string]string
 
 func main() {
-	compoundCondition()
+	env := Env{}
+	env.Vars = map[string]string{
+		"id":     "123",
+		"title":  "Note Title",
+		"date":   "2018-08-30",
+		"cat":    "grocery",
+		"tags":   "tag1,tag2,tag3",
+		"debit":  "2.00",
+		"credit": "3.00",
+		"amt":    "99.00",
+		"body":   "This is the body content.",
+	}
 
-	fmt.Println(D0.Val)
+	env.VarTypes = map[string]string{
+		"debit":  "f",
+		"credit": "f",
+		"amt":    "f",
+		"price":  "f",
+		"weight": "f",
+		"age":    "d",
+	}
+
+	ep := NewExprParser(os.Stdin)
+	ep.Run(&env)
+
+	fmt.Println(env.D0.Val)
 }
