@@ -1,0 +1,23 @@
+Rob, If you encounter another sync issue, try this guide. 
+
+# Start a new feature
+git checkout -b new-feature master
+# Edit files
+git commit -a -m "Start developing a feature"
+In the middle of your feature, we realize there’s a bug in your project
+# Create a bug branch based off of master
+git checkout -b bug master
+# Edit files
+git commit -a -m "Fix bug"
+# Merge back into master
+git checkout master
+git merge bug
+git branch -d bug
+After merging the bug into master, we have a forked project history. Instead of a plain git merge, we’ll integrate the feature branch with a rebase to maintain a linear history
+git checkout new-feature
+git rebase master
+git checkout master
+git merge new-feature
+
+(courtesy of Froi)
+
