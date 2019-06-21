@@ -103,27 +103,56 @@ void gapbuf_insert_text(gapbuf_t* g, char *text) {
     g->gap_start += text_len;
 }
 
+void gapbuf_shift_gap(gapbuf_t *g, int shift_len) {
+    if (shift_len == 0) return;
+
+    if (shift_len < 0) {
+        if (-shift_len > PRE_LEN(g)) {
+            shift_len = -PRE_LEN(g);
+        }
+
+        // Shift gap to the left by shift_len bytes.
+        shift_len = -shift_len;
+        g->gap_start -= shift_len;
+        g->gap_end -= shift_len;
+
+        memcpy(g->bytes + g->gap_end+1, g->bytes + g->gap_start, shift_len);
+        memset(g->bytes + g->gap_start, 0, shift_len);
+
+    } else if (shift_len > 0) {
+        if (shift_len > POST_LEN(g)) {
+            shift_len = POST_LEN(g);
+        }
+
+        // Shift gap to the right by shift_len bytes.
+        memcpy(g->bytes + g->gap_start, g->bytes + g->gap_end+1, shift_len);
+        memset(g->bytes + g->gap_end+1, 0, shift_len);
+
+        g->gap_start += shift_len;
+        g->gap_end += shift_len;
+    }
+}
+
 
 int main() {
-    gapbuf_t* g = gapbuf_new();
-    gapbuf_repr(g);
-
+    gapbuf_t* g1 = gapbuf_new();
     for (int i=0; i < 20; i++) {
-        gapbuf_insert_text(g, "abcdef ");
-        gapbuf_repr(g);
+        gapbuf_insert_text(g1, "abcdef ");
+        gapbuf_repr(g1);
     }
 
-    gapbuf_free(g);
+    gapbuf_t* g2 = gapbuf_new();
+    gapbuf_insert_text(g2, "0123456789");
+    gapbuf_repr(g2);
 
-/*
-    g.bytes = "0123456789";
-    g.bytes = "abcde___12345";
-    g.bytes = "abcde___12345";
-    g.bytes_len = strlen(g.bytes);
-    g.gap_start = 5;
-    g.gap_end = 7;
-    printf("gapbuf text: '%s'\n", gapbuf_text(g));
-*/
+    gapbuf_shift_gap(g2, -5);
+    gapbuf_repr(g2);
+    gapbuf_insert_text(g2, "abc");
+    gapbuf_repr(g2);
+
+    gapbuf_shift_gap(g2, 2000);
+    gapbuf_insert_text(g2, "def");
+    gapbuf_repr(g2);
 
     return 0;
 }
