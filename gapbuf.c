@@ -2,21 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
-typedef struct gapbuf_t {
-    char *bytes;            // total buffer storage including pre, gap, and post segments.
-    int bytes_len;          // number of bytes in buffer storage.
-    int gap_start, gap_end; // starting and ending indexes to gap.
-
-    // bytes:       [0]...[bytes_len-1] 
-    // gap:         [gap_start]...[gap_end]
-    // pre:         [0]...[gap_start-1]
-    // post:        [gap_end+1]...[bytes_len-1]
-    //
-    // gap_len =    gap_end-gap_start+1
-    // pre_len =    gap_start
-    // post_len =   bytes_len-gap_end-1 
-
-} gapbuf_t;
+#include "gapbuf.h"
 
 #define GAP_LEN(g)      (g->gap_end - g->gap_start + 1)
 #define PRE_LEN(g)      (g->gap_start)
@@ -27,10 +13,12 @@ typedef struct gapbuf_t {
 #define POST_END(g)     (g->bytes_len-1)
 
 gapbuf_t* gapbuf_new() {
-    int buf_initial_size = 50;
+    int buf_initial_size = 10;
 
     gapbuf_t* g = malloc(sizeof(gapbuf_t));
     g->bytes = malloc(buf_initial_size);
+    memset(g->bytes, 0, buf_initial_size);
+
     g->bytes_len = buf_initial_size;
     g->gap_start = 0;
     g->gap_end = buf_initial_size-1;
@@ -60,15 +48,35 @@ char* gapbuf_text(gapbuf_t* g) {
     return text;
 }
 
+char *_gapbuf_raw_text(gapbuf_t* g) {
+    int raw_text_len = g->bytes_len+1;
+    char *raw_text = malloc(raw_text_len);
+    memcpy(raw_text, g->bytes, g->bytes_len);
+    raw_text[raw_text_len] = '\0';
+
+    for (int i=0; i < raw_text_len-1; i++) {
+        if (raw_text[i] == '\0') {
+            raw_text[i] = '.';
+        }
+    }
+
+    return raw_text;
+}
+
 void gapbuf_repr(gapbuf_t* g) {
-    printf("bytes len: %d, gap: %d - %d, len: %d\n", g->bytes_len, g->gap_start, g->gap_end, g->gap_end-g->gap_start+1);
+    char *raw_text = _gapbuf_raw_text(g);
     char *text = gapbuf_text(g);
-    printf("text: '%s'\n", text);
+
+    printf("bytes (%d): '%s'\n", g->bytes_len, raw_text);
+    printf("gap (%d): [%d]-[%d]\n", GAP_LEN(g), g->gap_start, g->gap_end);
+    printf("text (%ld): '%s'\n", strlen(text), text);
+
+    free(raw_text);
     free(text);
 }
 
 // Return target exponential buffer growth cap.
-int buf_cap(int len) {
+int _buf_cap(int len) {
     int cap = 1;
     while (cap < len) {
         cap *= 2;
@@ -92,8 +100,8 @@ void _gapbuf_realloc_bytes(gapbuf_t *g, int new_bytes_len) {
 
 void gapbuf_insert_text(gapbuf_t* g, char *text) {
     int text_len = strlen(text);
-    if (text_len > GAP_LEN(g)) {
-        int new_bytes_len = buf_cap(g->bytes_len + text_len);
+    if (text_len >= GAP_LEN(g)) {
+        int new_bytes_len = _buf_cap(g->bytes_len + text_len);
         _gapbuf_realloc_bytes(g, new_bytes_len);
     }
 
@@ -133,7 +141,7 @@ void gapbuf_shift_gap(gapbuf_t *g, int shift_len) {
     }
 }
 
-
+#ifdef TEST
 int main() {
     gapbuf_t* g1 = gapbuf_new();
     for (int i=0; i < 20; i++) {
@@ -142,6 +150,7 @@ int main() {
     }
 
     gapbuf_t* g2 = gapbuf_new();
+    gapbuf_repr(g2);
     gapbuf_insert_text(g2, "0123456789");
     gapbuf_repr(g2);
 
@@ -150,10 +159,12 @@ int main() {
     gapbuf_insert_text(g2, "abc");
     gapbuf_repr(g2);
 
-    gapbuf_shift_gap(g2, 2000);
+    gapbuf_shift_gap(g2, -2000);
     gapbuf_insert_text(g2, "def");
     gapbuf_repr(g2);
 
     return 0;
 }
+#endif
+
 
